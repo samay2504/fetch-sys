@@ -1,0 +1,71 @@
+# =============================================================
+# fetchsys — .gitignore
+# =============================================================
+
+# ── Rust ─────────────────────────────────────────────────────
+/target/
+# Cargo.lock is committed for binaries (reproducible builds)
+
+# ── Secrets & local config ───────────────────────────────────
+.env
+config/local.toml
+config/local*.toml
+*.key
+*.pem
+*.p12
+*.pfx
+
+# ── IDE / Editor ─────────────────────────────────────────────
+.vscode/
+.idea/
+*.iml
+*.swp
+*.swo
+*~
+.project
+.classpath
+.settings/
+*.sublime-project
+*.sublime-workspace
+
+# ── OS artefacts ─────────────────────────────────────────────
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# ── Logs & diagnostics ───────────────────────────────────────
+*.log
+logs/
+*.trace
+
+# ── Release packaging ────────────────────────────────────────
+release/dist/
+dist/
+*.tar.gz
+*.zip
+*.deb
+*.rpm
+
+# ── Benchmarks / profiling output ────────────────────────────
+criterion/
+perf.data
+perf.data.old
+*.flamegraph
+*.svg
+
+# ── Coverage ─────────────────────────────────────────────────
+tarpaulin-report.html
+lcov.info
+/coverage/
+
+# ── Temporary / scratch files ─────────────────────────────────
+*.tmp
+*.bak
+*.orig
+scratch/
+tmp/

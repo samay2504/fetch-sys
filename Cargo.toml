@@ -1,0 +1,77 @@
+[package]
+name = "fetchsys"
+version = "0.1.0"
+edition = "2021"
+description = "Developer @tool for agent systems — multi-tier search, page reading, and LLM fact-checking via a single CLI call"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/samay2504/fetch-sys"
+readme = "README.md"
+
+[[bin]]
+name = "fetchsys"
+path = "src/main.rs"
+
+[dependencies]
+# CLI parsing
+clap = { version = "4", features = ["derive", "env"] }
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# HTTP client (rustls so no OpenSSL required on Windows)
+reqwest = { version = "0.12", features = ["json", "rustls-tls", "stream"], default-features = false }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Error handling
+thiserror = "2"
+anyhow = "1"
+
+# Logging / tracing
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+# Configuration
+config = { version = "0.14", features = ["toml"] }
+
+# .env loader (dev only; no-op in prod if file missing)
+dotenvy = "0.15"
+
+# Async utilities
+futures = "0.3"
+async-trait = "0.1"
+
+# Retries with backoff
+tokio-retry = "0.3"
+
+# Randomness for jitter
+rand = "0.8"
+
+# Timestamps
+chrono = { version = "0.4", features = ["serde"] }
+
+# URL canonicalisation
+url = "2"
+
+# HTML scraping fallback
+scraper = "0.21"
+
+# Base64 decoding (for Bing redirect URL unwrapping)
+base64 = "0.22"
+
+# Local document-to-Markdown conversion (HTML, DOCX, PPTX, XLSX, CSV, …)
+# default-features = false → sync-only API; no extra reqwest / tokio layers
+anytomd = { version = "1", default-features = false }
+
+[dev-dependencies]
+tokio-test = "0.4"
+wiremock = "0.6"
+serde_json = "1"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true

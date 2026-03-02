@@ -1,0 +1,17 @@
+# Project-level Cargo configuration
+#
+# No default target is forced here so the project builds natively on every OS:
+#   - Linux/macOS  → their default target automatically
+#   - Windows MSVC → x86_64-pc-windows-msvc  (requires Windows 10 SDK)
+#   - Windows GNU  → x86_64-pc-windows-gnu   (requires MinGW, no SDK needed)
+#
+# If you are on Windows without a full Windows 10 SDK you can override the
+# build target in your *user-level* Cargo config (~/.cargo/config.toml) so
+# this project file stays portable.  Example user config:
+#
+#   [build]
+#   target = "x86_64-pc-windows-gnu"
+#
+#   [target.x86_64-pc-windows-gnu]
+#   linker = "C:/msys64/mingw64/bin/gcc.exe"
+#   ar     = "C:/msys64/mingw64/bin/ar.exe"

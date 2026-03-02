@@ -1,0 +1,95 @@
+# fetchsys — default configuration
+# All values can be overridden by environment variables or config/local.toml
+
+[search]
+# Ordered list of providers — attempted left-to-right (waterfall fallback)
+# searxng/duckduckgo/bing are free (no key); brave/serper need API keys
+providers = ["searxng", "duckduckgo", "brave", "bing", "serper"]
+
+# Minimum result quality score (0.0–1.0) before cascading to next provider
+min_quality_score = 0.30
+
+# Maximum search results returned per provider call
+max_results = 10
+
+# Self-hosted SearXNG instance base URL (Tier 1, no key required)
+# Override with SEARXNG_URL environment variable
+searxng_url = "http://localhost:8888"
+
+# HTTP timeout in seconds
+timeout_secs = 10
+
+# Number of retries on transient failures
+retries = 2
+
+[reader]
+# Jina Reader base URL (Tier 1 reader — converts URL → LLM-friendly markdown)
+jina_reader_base = "https://r.jina.ai"
+
+# Jina search endpoint
+jina_search_base = "https://s.jina.ai"
+
+# Jina API key (optional — set JINA_API_KEY env var for higher rate limits)
+# jina_api_key = ""
+
+# Reader HTTP timeout per request in seconds
+timeout_secs = 10
+
+# Hard deadline (seconds) for the entire reader stage (all URLs combined).
+# Prevents a single slow URL from stalling the whole pipeline.
+reader_deadline_secs = 25
+
+# Maximum content bytes to accept per page (200 KB)
+max_content_bytes = 200000
+
+# Retries on transient reader failures (1 = one retry, 0 = no retry)
+retries = 1
+
+[llm]
+# Enable LLM synthesis (set to false to return raw aggregated snippets)
+enabled = true
+
+# Ordered provider waterfall — first provider with a valid key wins.
+# Valid values: google_gemini, groq, openrouter, ollama, openai, local, fallback
+provider_preference = ["google_gemini", "groq", "openrouter", "ollama", "openai", "local", "fallback"]
+
+# ── OpenAI-compatible ──
+# Base URL for OpenAI-compat endpoint (OpenAI, Azure, LM Studio, etc.)
+base_url = "https://api.openai.com/v1"
+# model name (override with LLM_MODEL env var)
+model = "gpt-4o-mini"
+
+# ── Google Gemini ──
+# Provide GOOGLE_API_KEY env var to activate this tier
+google_model = "gemini-2.5-flash"
+
+# ── Groq ──
+# Provide GROQ_API_KEY env var to activate this tier
+# Models are tried in order (each is a separate chain entry)
+groq_models = ["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "mixtral-8x7b-32768"]
+
+# ── OpenRouter ──
+# Provide OPENROUTER_API_KEY env var to activate this tier
+openrouter_model = "openai/gpt-4o-mini"
+
+# ── Ollama (local, no key required) ──
+ollama_url = "http://localhost:11434"
+ollama_model = "llama3.2"
+
+# ── Shared inference knobs ──
+max_tokens = 1024
+temperature = 0.2
+timeout_secs = 60
+
+# ── Circuit breaker ──
+# Consecutive failures before a provider is cooled down
+circuit_breaker_threshold = 3
+# Seconds in cooldown
+circuit_breaker_cooldown_secs = 60
+
+[factcheck]
+# Fraction of sources that must confirm a claim for "confirmed" status
+confirm_threshold = 0.60
+
+# Fraction of sources contradicting a claim for "contradicted" status
+contradict_threshold = 0.40
