@@ -1,6 +1,6 @@
-# fetchsys
+# Fetch-SyS
 
-> A developer `@tool` for agent systems — multi-tier web search, page reading, and LLM fact-checking in a single CLI call.
+> A developer `@tool` for agent systems ; multi-tier web search, page reading, and LLM fact-checking in a single CLI call.
 
 [![CI](https://github.com/samay2504/fetchsys/actions/workflows/ci.yml/badge.svg)](https://github.com/samay2504/fetchsys/actions/workflows/ci.yml)
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](LICENSE)
@@ -438,5 +438,6 @@ cargo build --release
 ## License
 
 Licensed under either of [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE) at your option.
+
 
 
