@@ -9,7 +9,7 @@
 
 ## Overview
 
-`fetchsys` is a single-binary CLI tool designed to be called as a **`@tool` inside other AI agent pipelines** (LangChain, AutoGen, CrewAI, custom orchestrators, etc.).  It takes a query string and returns a rich, structured JSON response containing search results, page content, and LLM-fact-checked claims — all in one shot.
+`Fetch-SyS` is a single-binary CLI tool designed to be called as a **`@tool` inside other AI agent pipelines** (LangChain, AutoGen, CrewAI, custom orchestrators, etc.).  It takes a query string and returns a rich, structured JSON response containing search results, page content, and LLM-fact-checked claims — all in one shot.
 
 ```sh
 fetchsys "who is Ada Lovelace"
@@ -438,6 +438,7 @@ cargo build --release
 ## License
 
 Licensed under either of [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE) at your option.
+
 
 
 
