@@ -117,7 +117,7 @@ fetchsys --json "quantum entanglement" | jq '.answer.confidence'
 
 ```sh
 # Clone and build
-git clone https://github.com/your-org/fetchsys
+git clone https://github.com/samay2504/fetchsys
 cd fetchsys
 cargo build --release
 
@@ -438,4 +438,5 @@ cargo build --release
 ## License
 
 Licensed under either of [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE) at your option.
+
 
