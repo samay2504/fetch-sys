@@ -34,7 +34,7 @@ pub struct Opts {
     pub top_n: usize,
 
     /// Comma-separated ordered list of search provider names to attempt.
-    /// Valid values: searxng, brave, serper
+    /// Valid values: searxng, duckduckgo, brave, bing, google, serper
     /// Defaults to the order defined in config.
     #[arg(long, value_delimiter = ',', env = "FETCHSYS_PROVIDERS")]
     pub providers: Option<Vec<String>>,

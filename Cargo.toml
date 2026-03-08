@@ -1,8 +1,8 @@
 [package]
 name = "fetchsys"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
-description = "Developer @tool for agent systems — multi-tier search, page reading, and LLM fact-checking via a single CLI call"
+description = "Developer @tool for agent systems — production-grade concurrent crawler + multi-tier search + LLM fact-checking"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/samay2504/fetch-sys"
 readme = "README.md"
@@ -10,6 +10,26 @@ readme = "README.md"
 [[bin]]
 name = "fetchsys"
 path = "src/main.rs"
+
+# ---------------------------------------------------------------------------
+# Optional features
+# ---------------------------------------------------------------------------
+[features]
+default = []
+# Enable headless-Chrome JS rendering (requires Chrome installed on the system)
+headless = ["chromiumoxide"]
+# Enable Selenium WebDriver control (requires a running chromedriver / geckodriver)
+selenium = ["thirtyfour"]
+
+[dependencies.chromiumoxide]
+version = "0.5"
+optional = true
+default-features = false
+features = ["tokio-runtime"]
+
+[dependencies.thirtyfour]
+version = "0.31"
+optional = true
 
 [dependencies]
 # CLI parsing
@@ -46,7 +66,7 @@ async-trait = "0.1"
 # Retries with backoff
 tokio-retry = "0.3"
 
-# Randomness for jitter
+# Randomness for jitter + UA rotation
 rand = "0.8"
 
 # Timestamps
@@ -62,8 +82,38 @@ scraper = "0.21"
 base64 = "0.22"
 
 # Local document-to-Markdown conversion (HTML, DOCX, PPTX, XLSX, CSV, …)
-# default-features = false → sync-only API; no extra reqwest / tokio layers
 anytomd = { version = "1", default-features = false }
+
+# Mozilla Readability — extract main article content from HTML
+readability = "0.3"
+
+# HTML-to-Markdown (turndown.js-inspired, high quality)
+htmd = "0.5"
+
+# ---------------------------------------------------------------------------
+# Performance crawler engine — new dependencies
+# ---------------------------------------------------------------------------
+
+# Concurrent hash map (lock-free sharded)
+dashmap = "5"
+
+# Byte buffers — avoid extra copies in the fetch pipeline
+bytes = "1"
+
+# Lazy static initialisation (compiled regexes, UA pool)
+once_cell = "1"
+
+# Regex — page classification heuristics
+regex = "1"
+
+# Token-bucket rate limiter — per-domain politeness
+governor = { version = "0.6", default-features = false, features = ["std", "jitter"] }
+
+# Fake/mock data generation (emails, passwords, names) — for credential vault
+fake = { version = "2.9", features = ["derive"] }
+
+# SHA-256 hashing for credential fingerprinting
+sha2 = "0.10"
 
 [dev-dependencies]
 tokio-test = "0.4"

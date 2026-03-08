@@ -285,7 +285,7 @@ fn is_metadata_line(line: &str) -> bool {
 ///   to be falsely marked contradicting — this fixes that.
 ///
 /// Replace with embedding-similarity reranking when a vector store is available.
-fn cross_reference(claim: &str, docs: &[ReadResult]) -> AnnotatedClaim {
+fn cross_reference(claim: &str, docs: &[ReadResult], docs_lower: &[String]) -> AnnotatedClaim {
     // Meaningful content words only (skip stop-words under 4 chars)
     let claim_lower = claim.to_lowercase();
     let keywords: Vec<&str> = claim_lower
@@ -320,8 +320,7 @@ fn cross_reference(claim: &str, docs: &[ReadResult]) -> AnnotatedClaim {
     let mut supporting = Vec::new();
     let mut contradicting = Vec::new();
 
-    for doc in docs {
-        let content_lower = doc.content.to_lowercase();
+    for (doc, content_lower) in docs.iter().zip(docs_lower.iter()) {
 
         // Always consider docments relevant when no meaningful keywords exist
         if keywords.is_empty() {
@@ -487,32 +486,35 @@ pub async fn check(
 ) -> FactCheckOutput {
     info!(doc_count = docs.len(), "Starting fact-check pipeline");
 
-    // 1. Synthesise answer
-    let answer = synthesise(query, docs, provider, llm_enabled).await;
-
-    // 2. Extract claims
-    let claims_text = if llm_enabled {
-        let llm_claims = extract_claims_via_llm(query, docs, provider)
-            .await
-            .unwrap_or_else(|e| {
-                tracing::warn!(error = %e, "LLM claim extraction failed; using heuristic");
-                Vec::new()
-            });
-        // If LLM returned nothing usable, always fall back to heuristic
-        if llm_claims.is_empty() {
-            tracing::info!("Using heuristic claim extraction (LLM produced no claims)");
-            extract_claims_heuristic(query, docs)
-        } else {
-            llm_claims
-        }
+    // 1+2. Synthesise answer and extract claims concurrently
+    let (answer, claims_text) = if llm_enabled {
+        let synth_fut = synthesise(query, docs, provider, llm_enabled);
+        let claims_fut = async {
+            let llm_claims = extract_claims_via_llm(query, docs, provider)
+                .await
+                .unwrap_or_else(|e| {
+                    tracing::warn!(error = %e, "LLM claim extraction failed; using heuristic");
+                    Vec::new()
+                });
+            if llm_claims.is_empty() {
+                tracing::info!("Using heuristic claim extraction (LLM produced no claims)");
+                extract_claims_heuristic(query, docs)
+            } else {
+                llm_claims
+            }
+        };
+        tokio::join!(synth_fut, claims_fut)
     } else {
-        extract_claims_heuristic(query, docs)
+        let answer = synthesise(query, docs, provider, llm_enabled).await;
+        let claims_text = extract_claims_heuristic(query, docs);
+        (answer, claims_text)
     };
 
-    // 3. Cross-reference each claim
+    // 3. Cross-reference each claim (pre-compute lowercased docs once)
+    let docs_lower: Vec<String> = docs.iter().map(|d| d.content.to_lowercase()).collect();
     let annotated: Vec<AnnotatedClaim> = claims_text
         .iter()
-        .map(|c| cross_reference(c, docs))
+        .map(|c| cross_reference(c, docs, &docs_lower))
         .collect();
 
     // 4. Compute confidence
@@ -533,6 +535,7 @@ pub async fn check(
 /// - Clean: `["a", "b"]`
 /// - Markdown-fenced: `` ```json\n["a", "b"]\n``` ``
 /// - Truncated: `["a", "b", "c` → repairs to `["a", "b"]` (best-effort)
+/// - Unescaped inner quotes: `["The paper "X" was..."]` → escapes inner `"`
 fn extract_json_array(text: &str) -> Option<String> {
     let start = text.find('[')?;
 
@@ -543,6 +546,10 @@ fn extract_json_array(text: &str) -> Option<String> {
             // Quick validation: if it parses, great
             if serde_json::from_str::<Vec<String>>(candidate).is_ok() {
                 return Some(candidate.to_owned());
+            }
+            // Try sanitising unescaped inner quotes before giving up on full match
+            if let Some(fixed) = sanitize_json_inner_quotes(candidate) {
+                return Some(fixed);
             }
         }
     }
@@ -579,9 +586,109 @@ fn extract_json_array(text: &str) -> Option<String> {
         if serde_json::from_str::<Vec<String>>(&repaired).is_ok() {
             return Some(repaired);
         }
+        // Try sanitising the repaired string too
+        if let Some(fixed) = sanitize_json_inner_quotes(&repaired) {
+            return Some(fixed);
+        }
     }
 
     None
+}
+
+/// Fix unescaped inner quotes in a JSON array of strings.
+///
+/// LLMs sometimes produce output like:
+///   `["The paper "Attention Is All You Need" introduced..."]`
+/// where the inner quotes are not escaped. This function walks the
+/// byte stream and escapes any `"` that appears mid-string (i.e. not
+/// at an element boundary like `["`, `",` or `"]`).
+fn sanitize_json_inner_quotes(text: &str) -> Option<String> {
+    let bytes = text.as_bytes();
+    let len = bytes.len();
+    if len < 2 || bytes[0] != b'[' {
+        return None;
+    }
+
+    let mut out = Vec::with_capacity(len + 64);
+    out.push(b'[');
+    let mut i = 1;
+
+    // Skip leading whitespace inside the array
+    while i < len && bytes[i].is_ascii_whitespace() {
+        out.push(bytes[i]);
+        i += 1;
+    }
+
+    while i < len {
+        // End of array
+        if bytes[i] == b']' {
+            out.push(b']');
+            break;
+        }
+        // Expect opening quote of a string element
+        if bytes[i] != b'"' {
+            // Skip unexpected chars (whitespace, commas already handled)
+            out.push(bytes[i]);
+            i += 1;
+            continue;
+        }
+
+        // ── Process one string element ──
+        out.push(b'"'); // opening quote
+        i += 1;
+
+        while i < len {
+            // Already-escaped char — pass through
+            if bytes[i] == b'\\' && i + 1 < len {
+                out.push(bytes[i]);
+                out.push(bytes[i + 1]);
+                i += 2;
+                continue;
+            }
+            if bytes[i] == b'"' {
+                // Is this the *closing* quote?  Look ahead past whitespace
+                // for `,` or `]` which indicate element boundary.
+                let mut j = i + 1;
+                while j < len && bytes[j].is_ascii_whitespace() {
+                    j += 1;
+                }
+                if j >= len || bytes[j] == b',' || bytes[j] == b']' {
+                    // Closing quote
+                    out.push(b'"');
+                    i = j;
+                    break;
+                }
+                // Inner quote — escape it
+                out.push(b'\\');
+                out.push(b'"');
+                i += 1;
+            } else {
+                out.push(bytes[i]);
+                i += 1;
+            }
+        }
+
+        // Consume comma + whitespace between elements
+        while i < len && bytes[i].is_ascii_whitespace() {
+            out.push(bytes[i]);
+            i += 1;
+        }
+        if i < len && bytes[i] == b',' {
+            out.push(b',');
+            i += 1;
+        }
+        while i < len && bytes[i].is_ascii_whitespace() {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+
+    let repaired = String::from_utf8(out).ok()?;
+    if serde_json::from_str::<Vec<String>>(&repaired).is_ok() {
+        Some(repaired)
+    } else {
+        None
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -670,6 +777,34 @@ mod tests {
         let json = extract_json_array(raw).unwrap();
         let parsed: Vec<String> = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.len(), 3);
+    }
+
+    #[test]
+    fn extract_json_array_with_unescaped_inner_quotes() {
+        // LLM produces: ["The paper "Attention Is All You Need" introduced transformers"]
+        let raw = r#"["The paper "Attention Is All You Need" introduced transformers"]"#;
+        let json = extract_json_array(raw).unwrap();
+        let parsed: Vec<String> = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.len(), 1);
+        assert!(parsed[0].contains("Attention Is All You Need"));
+    }
+
+    #[test]
+    fn extract_json_array_with_multiple_unescaped_quotes() {
+        let raw = r#"["The paper "X" introduced "Y" concept", "Another claim here"]"#;
+        let json = extract_json_array(raw).unwrap();
+        let parsed: Vec<String> = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.len(), 2);
+        assert!(parsed[0].contains("\"X\""));
+        assert_eq!(parsed[1], "Another claim here");
+    }
+
+    #[test]
+    fn sanitize_json_inner_quotes_already_valid() {
+        let input = r#"["valid", "already"]"#;
+        // Should return None because the input already parses cleanly
+        assert!(sanitize_json_inner_quotes(input).is_none() ||
+                sanitize_json_inner_quotes(input) == Some(input.to_owned()));
     }
 
     #[test]

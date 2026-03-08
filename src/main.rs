@@ -65,9 +65,8 @@ async fn main() -> anyhow::Result<()> {
         .cloned()
         .collect::<Vec<_>>();
 
-    // --------------- Reader ---------------
-    let docs = reader::read_top(&top, &cfg.reader).await;
-    info!(count = docs.len(), "Reader complete");
+    // --------------- Reader + CrawlScheduler ---------------
+    let docs = reader::read_top(&top, &cfg.reader, &cfg.crawler, &query).await;
 
     if docs.is_empty() {
         warn!("All reader adapters failed; output will be based purely on search snippets");

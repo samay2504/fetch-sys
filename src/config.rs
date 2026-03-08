@@ -44,6 +44,7 @@ impl Default for SearchConfig {
                 "duckduckgo".into(),
                 "brave".into(),
                 "bing".into(),
+                "google".into(),
                 "serper".into(),
             ],
             min_quality_score: 0.3,
@@ -66,6 +67,10 @@ pub struct ReaderConfig {
     pub jina_search_base: String,
     /// Jina API key (optional — free tier available, key grants higher limits).
     pub jina_api_key: Option<String>,
+    /// Firecrawl API key (optional — open-source, self-hostable).
+    pub firecrawl_api_key: Option<String>,
+    /// Firecrawl base URL (default: https://api.firecrawl.dev).
+    pub firecrawl_base_url: Option<String>,
     /// Timeout for reader HTTP requests.
     pub timeout_secs: u64,
     /// Hard deadline (seconds) for the entire reader stage (all URLs combined).
@@ -83,6 +88,8 @@ impl Default for ReaderConfig {
             jina_reader_base: "https://r.jina.ai".into(),
             jina_search_base: "https://s.jina.ai".into(),
             jina_api_key: None,
+            firecrawl_api_key: None,
+            firecrawl_base_url: None,
             timeout_secs: 10,
             reader_deadline_secs: 25,
             max_content_bytes: 200_000,
@@ -201,18 +208,133 @@ impl Default for FactCheckConfig {
 }
 
 // ---------------------------------------------------------------------------
+// CrawlerConfig — performance crawler engine
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct CrawlerConfig {
+    /// Maximum number of URLs fetched concurrently (Semaphore size).
+    pub max_concurrent: usize,
+    /// HTTP fetch timeout per URL in seconds.
+    pub fetch_timeout_secs: u64,
+    /// Maximum content body size accepted per page (bytes).
+    pub max_content_bytes: usize,
+    /// Minimum gap between requests to the same domain (milliseconds).
+    pub domain_gap_ms: u64,
+    /// Maximum random jitter added on top of domain_gap_ms (milliseconds).
+    pub jitter_max_ms: u64,
+    /// Page cache TTL in seconds. 0 disables caching.
+    pub cache_ttl_secs: u64,
+    /// Retry count for transient fetch failures.
+    pub retries: u32,
+}
+
+impl Default for CrawlerConfig {
+    fn default() -> Self {
+        Self {
+            max_concurrent: 8,
+            fetch_timeout_secs: 15,
+            max_content_bytes: 300_000,
+            domain_gap_ms: 400,
+            jitter_max_ms: 1_200,
+            cache_ttl_secs: 300, // 5 minutes
+            retries: 1,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// LoginConfig — mock credential vault + login automation
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct LoginConfig {
+    /// Whether automatic login-wall handling is enabled.
+    pub enabled: bool,
+    /// Path to a JSON credential vault file.
+    /// If empty, credentials are auto-generated using the `fake` crate.
+    pub vault_path: Option<String>,
+    /// Selenium / WebDriver URL (used when `selenium` feature is compiled in).
+    pub webdriver_url: String,
+    /// Persist newly generated credentials back to `vault_path` on exit.
+    pub persist_generated: bool,
+}
+
+impl Default for LoginConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false, // opt-in — don't attempt login by default
+            vault_path: None,
+            webdriver_url: "http://localhost:4444".into(),
+            persist_generated: false,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ScrollConfig — infinite-scroll content accumulation
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct ScrollConfigToml {
+    /// Whether scroll extraction is enabled for JS-heavy pages.
+    pub enabled: bool,
+    /// Maximum scroll steps per page.
+    pub max_steps: u32,
+    /// Milliseconds to wait between scroll steps.
+    pub pause_ms: u64,
+    /// Stop when word-count growth drops below this fraction.
+    pub growth_threshold: f64,
+    /// Hard character cap for accumulated HTML.
+    pub max_chars: usize,
+}
+
+impl Default for ScrollConfigToml {
+    fn default() -> Self {
+        Self {
+            enabled: false, // off by default — enable for JS-heavy sites
+            max_steps: 12,
+            pause_ms: 900,
+            growth_threshold: 0.03,
+            max_chars: 500_000,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Top-level Config
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct Config {
     pub search: SearchConfig,
     pub reader: ReaderConfig,
     pub llm: LlmConfig,
     pub factcheck: FactCheckConfig,
+    pub crawler: CrawlerConfig,
+    pub login: LoginConfig,
+    pub scroll: ScrollConfigToml,
     /// Number of top search results to read (can be overridden by CLI --top-n).
     pub top_n: usize,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            search: SearchConfig::default(),
+            reader: ReaderConfig::default(),
+            llm: LlmConfig::default(),
+            factcheck: FactCheckConfig::default(),
+            crawler: CrawlerConfig::default(),
+            login: LoginConfig::default(),
+            scroll: ScrollConfigToml::default(),
+            top_n: 5,
+        }
+    }
 }
 
 impl Config {
@@ -265,6 +387,8 @@ impl Config {
             ("OLLAMA_URL",               "llm.ollama_url"),
             ("OLLAMA_MODEL",             "llm.ollama_model"),
             ("JINA_API_KEY",             "reader.jina_api_key"),
+            ("FIRECRAWL_API_KEY",        "reader.firecrawl_api_key"),
+            ("FIRECRAWL_BASE_URL",       "reader.firecrawl_base_url"),
         ];
         for (env_var, config_key) in env_mappings {
             if let Ok(val) = std::env::var(env_var) {

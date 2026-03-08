@@ -3,8 +3,8 @@
 
 [search]
 # Ordered list of providers — attempted left-to-right (waterfall fallback)
-# searxng/duckduckgo/bing are free (no key); brave/serper need API keys
-providers = ["searxng", "duckduckgo", "brave", "bing", "serper"]
+# searxng/duckduckgo/bing/google are free (no key); brave/serper need API keys
+providers = ["searxng", "duckduckgo", "brave", "bing", "google", "serper"]
 
 # Minimum result quality score (0.0–1.0) before cascading to next provider
 min_quality_score = 0.30
@@ -23,14 +23,28 @@ timeout_secs = 10
 retries = 2
 
 [reader]
-# Jina Reader base URL (Tier 1 reader — converts URL → LLM-friendly markdown)
+# Reader waterfall (5 tiers):
+#   Tier 1 → Jina Reader (external API, skipped if no key)
+#   Tier 2 → Readability + htmd (Rust-native, free, local — replicates Jina)
+#   Tier 3 → anytomd (pure-Rust document converter)
+#   Tier 4 → Firecrawl API (open-source, self-hostable, skipped if no key)
+#   Tier 5 → Raw HTTP + scraper (plain-text last resort)
+
+# Jina Reader base URL (Tier 1 — external API, optional)
 jina_reader_base = "https://r.jina.ai"
 
 # Jina search endpoint
 jina_search_base = "https://s.jina.ai"
 
-# Jina API key (optional — set JINA_API_KEY env var for higher rate limits)
+# Jina API key (optional — set JINA_API_KEY env var; skipped if unset)
 # jina_api_key = ""
+
+# Firecrawl API key (optional — set FIRECRAWL_API_KEY env var; skipped if unset)
+# Open-source (AGPL-3.0), self-hostable: https://github.com/mendableai/firecrawl
+# firecrawl_api_key = ""
+
+# Firecrawl base URL (set FIRECRAWL_BASE_URL env var to override for self-hosted instances)
+firecrawl_base_url = "https://api.firecrawl.dev"
 
 # Reader HTTP timeout per request in seconds
 timeout_secs = 10
@@ -74,7 +88,7 @@ openrouter_model = "openai/gpt-4o-mini"
 
 # ── Ollama (local, no key required) ──
 ollama_url = "http://localhost:11434"
-ollama_model = "llama3.2"
+ollama_model = "dolphin-llama3"
 
 # ── Shared inference knobs ──
 max_tokens = 1024
@@ -87,9 +101,63 @@ circuit_breaker_threshold = 3
 # Seconds in cooldown
 circuit_breaker_cooldown_secs = 60
 
+# Number of top search results to read and fact-check (overridable via --top-n)
+top_n = 5
+
 [factcheck]
 # Fraction of sources that must confirm a claim for "confirmed" status
 confirm_threshold = 0.60
 
 # Fraction of sources contradicting a claim for "contradicted" status
 contradict_threshold = 0.40
+
+[crawler]
+# Maximum number of URLs fetched concurrently
+max_concurrent = 8
+
+# HTTP fetch timeout per URL in seconds
+fetch_timeout_secs = 15
+
+# Maximum content body size accepted per page (bytes, ~300 KB)
+max_content_bytes = 300000
+
+# Minimum gap between requests to the same domain (ms)
+domain_gap_ms = 400
+
+# Maximum random jitter added on top of domain_gap_ms (ms)
+jitter_max_ms = 1200
+
+# Page cache TTL in seconds (0 = no caching)
+cache_ttl_secs = 300
+
+# Retry count for transient fetch failures
+retries = 1
+
+[login]
+# Whether automatic login-wall handling is enabled (opt-in)
+enabled = false
+
+# Path to a JSON credential vault file (auto-generates if empty)
+# vault_path = ""
+
+# Selenium / WebDriver URL for headless login flows
+webdriver_url = "http://localhost:4444"
+
+# Persist generated credentials back to vault on exit
+persist_generated = false
+
+[scroll]
+# Whether scroll extraction is enabled for JS-heavy pages
+enabled = false
+
+# Maximum scroll steps per page
+max_steps = 12
+
+# Milliseconds to wait between scroll steps
+pause_ms = 900
+
+# Stop when word-count growth drops below this fraction
+growth_threshold = 0.03
+
+# Hard character cap for accumulated HTML
+max_chars = 500000

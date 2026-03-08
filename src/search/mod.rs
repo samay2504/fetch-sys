@@ -8,6 +8,7 @@
 
 use anyhow::{bail, Context};
 use async_trait::async_trait;
+use once_cell::sync::Lazy;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::{collections::HashSet, sync::Arc, time::Duration};
@@ -75,7 +76,7 @@ impl SearXNGProvider {
             .timeout(timeout)
             .user_agent("fetchsys/0.1 (+https://github.com/your-org/fetchsys)")
             .build()
-            .expect("Failed to build SearXNG HTTP client");
+            .unwrap_or_else(|_| reqwest::Client::new());
         Self {
             client,
             base_url: base_url.trim_end_matches('/').to_owned(),
@@ -156,7 +157,7 @@ impl DuckDuckGoProvider {
             .timeout(timeout)
             .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
             .build()
-            .expect("Failed to build DuckDuckGo HTTP client");
+            .unwrap_or_else(|_| reqwest::Client::new());
         Self { client }
     }
 
@@ -193,24 +194,25 @@ impl SearchProvider for DuckDuckGoProvider {
             .await
             .context("DuckDuckGo response body read failed")?;
 
+        static DDG_RESULT_SEL: Lazy<Selector> = Lazy::new(|| Selector::parse("div.result").unwrap());
+        static DDG_TITLE_SEL: Lazy<Selector>  = Lazy::new(|| Selector::parse("a.result__a").unwrap());
+        static DDG_SNIP_SEL: Lazy<Selector>   = Lazy::new(|| Selector::parse("a.result__snippet").unwrap());
+
         let document = Html::parse_document(&html);
-        let result_sel = Selector::parse("div.result").unwrap();
-        let title_sel  = Selector::parse("a.result__a").unwrap();
-        let snip_sel   = Selector::parse("a.result__snippet").unwrap();
 
         let results = document
-            .select(&result_sel)
+            .select(&DDG_RESULT_SEL)
             .take(max)
             .enumerate()
             .filter_map(|(i, div)| {
-                let a = div.select(&title_sel).next()?;
+                let a = div.select(&DDG_TITLE_SEL).next()?;
                 let title = a.text().collect::<String>().trim().to_owned();
                 let href  = a.value().attr("href").unwrap_or("").to_owned();
                 if title.is_empty() || href.is_empty() {
                     return None;
                 }
                 let url     = Self::decode_ddg_href(&href);
-                let snippet = div.select(&snip_sel).next()
+                let snippet = div.select(&DDG_SNIP_SEL).next()
                     .map(|s| s.text().collect::<String>().trim().to_owned())
                     .unwrap_or_default();
                 Some(SearchResult {
@@ -241,7 +243,7 @@ impl BraveProvider {
             .timeout(timeout)
             .user_agent("fetchsys/0.1")
             .build()
-            .expect("Failed to build Brave HTTP client");
+            .unwrap_or_else(|_| reqwest::Client::new());
         Self { client, api_key }
     }
 }
@@ -353,7 +355,7 @@ impl BingProvider {
             .timeout(timeout)
             .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
             .build()
-            .expect("Failed to build Bing HTTP client");
+            .unwrap_or_else(|_| reqwest::Client::new());
         Self { client }
     }
 }
@@ -383,23 +385,23 @@ impl SearchProvider for BingProvider {
             .context("Bing response body read failed")?;
 
         let document = Html::parse_document(&html);
-        let item_sel   = Selector::parse("li.b_algo").unwrap();
-        let title_sel  = Selector::parse("h2 > a").unwrap();
-        let snip_sel   = Selector::parse("p").unwrap();
+        static BING_ITEM_SEL: Lazy<Selector>  = Lazy::new(|| Selector::parse("li.b_algo").unwrap());
+        static BING_TITLE_SEL: Lazy<Selector> = Lazy::new(|| Selector::parse("h2 > a").unwrap());
+        static BING_SNIP_SEL: Lazy<Selector>  = Lazy::new(|| Selector::parse("p").unwrap());
 
         let results = document
-            .select(&item_sel)
+            .select(&BING_ITEM_SEL)
             .take(max)
             .enumerate()
             .filter_map(|(i, li)| {
-                let a = li.select(&title_sel).next()?;
+                let a = li.select(&BING_TITLE_SEL).next()?;
                 let title = a.text().collect::<String>().trim().to_owned();
                 let raw_url = a.value().attr("href").unwrap_or("");
                 let url = decode_bing_url(raw_url);
                 if title.is_empty() || url.is_empty() {
                     return None;
                 }
-                let snippet = li.select(&snip_sel).next()
+                let snippet = li.select(&BING_SNIP_SEL).next()
                     .map(|p| p.text().collect::<String>().trim().to_owned())
                     .unwrap_or_default();
                 Some(SearchResult {
@@ -416,7 +418,128 @@ impl SearchProvider for BingProvider {
 }
 
 // ---------------------------------------------------------------------------
-// Tier 5 — Serper.dev
+// Tier 5 — Google (HTML scrape, no API key, emergency fallback)
+// ---------------------------------------------------------------------------
+
+pub struct GoogleProvider {
+    client: reqwest::Client,
+}
+
+impl GoogleProvider {
+    pub fn new(timeout: Duration) -> Self {
+        let client = reqwest::Client::builder()
+            .timeout(timeout)
+            .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
+            .redirect(reqwest::redirect::Policy::limited(5))
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new());
+        Self { client }
+    }
+}
+
+/// Decode Google redirect URLs: /url?q=<real-url>&sa=...
+fn decode_google_url(href: &str) -> String {
+    // Google wraps results in /url?q=<encoded_url>
+    if href.starts_with("/url?") || href.contains("google.com/url?") {
+        let full = if href.starts_with('/') {
+            format!("https://www.google.com{href}")
+        } else {
+            href.to_owned()
+        };
+        if let Ok(parsed) = Url::parse(&full) {
+            if let Some(q) = parsed.query_pairs().find(|(k, _)| k == "q").map(|(_, v)| v.into_owned()) {
+                return q;
+            }
+        }
+    }
+    href.to_owned()
+}
+
+#[async_trait]
+impl SearchProvider for GoogleProvider {
+    fn name(&self) -> &'static str {
+        "google"
+    }
+
+    async fn search(&self, query: &str, max: usize) -> anyhow::Result<Vec<SearchResult>> {
+        use scraper::{Html, Selector};
+        debug!("Google search");
+
+        let html = self
+            .client
+            .get("https://www.google.com/search")
+            .query(&[("q", query), ("hl", "en"), ("num", &max.to_string())])
+            .header("Accept-Language", "en-US,en;q=0.9")
+            .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+            .send()
+            .await
+            .context("Google request failed")?
+            .error_for_status()
+            .context("Google returned an error status")?
+            .text()
+            .await
+            .context("Google response body read failed")?;
+
+        let document = Html::parse_document(&html);
+
+        // Google organic result selectors (multiple patterns for robustness)
+        static GOOGLE_RESULT_SEL: Lazy<Selector> = Lazy::new(|| Selector::parse("div.g").unwrap());
+        static GOOGLE_TITLE_SEL: Lazy<Selector> = Lazy::new(|| Selector::parse("h3").unwrap());
+        static GOOGLE_LINK_SEL: Lazy<Selector> = Lazy::new(|| Selector::parse("a").unwrap());
+        static GOOGLE_SNIP_SEL: Lazy<Selector> = Lazy::new(|| {
+            // Google uses various class names; try common ones
+            Selector::parse("div.VwiC3b, span.aCOpRe, div[data-sncf], div.IsZvec").unwrap()
+        });
+
+        let results: Vec<SearchResult> = document
+            .select(&GOOGLE_RESULT_SEL)
+            .take(max)
+            .enumerate()
+            .filter_map(|(i, div)| {
+                let a = div.select(&GOOGLE_LINK_SEL).next()?;
+                let raw_href = a.value().attr("href").unwrap_or("");
+                let url = decode_google_url(raw_href);
+
+                // Skip internal Google links, images, etc.
+                if url.starts_with('/') || url.starts_with('#') || url.contains("google.com/") {
+                    return None;
+                }
+                // Validate it's a real URL
+                if Url::parse(&url).is_err() {
+                    return None;
+                }
+
+                let title = div.select(&GOOGLE_TITLE_SEL).next()
+                    .map(|h3| h3.text().collect::<String>().trim().to_owned())
+                    .unwrap_or_default();
+
+                if title.is_empty() {
+                    return None;
+                }
+
+                let snippet = div.select(&GOOGLE_SNIP_SEL).next()
+                    .map(|s| s.text().collect::<String>().trim().to_owned())
+                    .unwrap_or_default();
+
+                Some(SearchResult {
+                    url, title, snippet,
+                    rank: i + 1,
+                    provider: "google".into(),
+                    quality: 0.65,
+                })
+            })
+            .collect();
+
+        if results.is_empty() {
+            bail!("Google returned no parseable results (possible CAPTCHA or layout change)");
+        }
+
+        Ok(results)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tier 6 — Serper.dev
 // ---------------------------------------------------------------------------
 
 pub struct SerperProvider {
@@ -429,7 +552,7 @@ impl SerperProvider {
         let client = reqwest::Client::builder()
             .timeout(timeout)
             .build()
-            .expect("Failed to build Serper HTTP client");
+            .unwrap_or_else(|_| reqwest::Client::new());
         Self { client, api_key }
     }
 }
@@ -506,7 +629,11 @@ impl ProviderRegistry {
         for name in &cfg.providers {
             match name.to_lowercase().as_str() {
                 "searxng" => {
-                    providers.push(Arc::new(SearXNGProvider::new(&cfg.searxng_url, timeout)));
+                    // SearXNG is local (Docker) — use a short timeout so we fail
+                    // fast when the container is not running instead of blocking
+                    // the full provider timeout × retries.
+                    let searxng_timeout = Duration::from_secs(timeout.as_secs().min(3));
+                    providers.push(Arc::new(SearXNGProvider::new(&cfg.searxng_url, searxng_timeout)));
                 }
                 "duckduckgo" => {
                     providers.push(Arc::new(DuckDuckGoProvider::new(timeout)));
@@ -519,6 +646,9 @@ impl ProviderRegistry {
                 }
                 "bing" => {
                     providers.push(Arc::new(BingProvider::new(timeout)));
+                }
+                "google" => {
+                    providers.push(Arc::new(GoogleProvider::new(timeout)));
                 }
                 "serper" => {
                     match cfg.serper_api_key.as_deref().filter(|k| !k.is_empty()) {
@@ -601,12 +731,13 @@ fn result_set_quality(results: &[SearchResult]) -> f64 {
 // Public entry point
 // ---------------------------------------------------------------------------
 
-/// Perform a multi-tier search with automatic fallback.
+/// Perform a multi-tier search with automatic fallback and a hard deadline.
 ///
 /// - Attempts each provider in order (as configured by `providers` list).
 /// - Accepts a tier's results if the quality score meets or exceeds `min_quality_score`.
 /// - Falls back to next provider on failure or low quality.
 /// - Returns the best available result set, deduplicated and re-ranked.
+/// - A hard deadline of `3 × timeout_secs` caps total wall-clock time.
 pub async fn multi_tier_search(
     query: &str,
     cfg: &SearchConfig,
@@ -618,51 +749,64 @@ pub async fn multi_tier_search(
         bail!("No search providers configured. Enable searxng/duckduckgo/bing (no key), or set BRAVE_API_KEY / SERPER_API_KEY.");
     }
 
-    let mut best: Vec<SearchResult> = Vec::new();
+    // Hard deadline: 3× individual provider timeout caps overall search wall-clock
+    let deadline = Duration::from_secs(cfg.timeout_secs.saturating_mul(3).max(15));
 
-    for provider in providers {
-        let pname = provider.name();
-        info!(%pname, "Attempting search provider");
+    let search_future = async {
+        let mut best: Vec<SearchResult> = Vec::new();
 
-        let result = with_retry(pname, cfg.retries, || {
-            let p = provider.clone();
-            let q = query.to_owned();
-            let max = cfg.max_results;
-            async move { p.search(&q, max).await }
-        })
-        .await;
+        for provider in providers {
+            let pname = provider.name();
+            info!(%pname, "Attempting search provider");
 
-        match result {
-            Err(e) => {
-                warn!(%pname, error = %e, "Provider failed; falling back");
-                continue;
-            }
-            Ok(results) if results.is_empty() => {
-                warn!(%pname, "Provider returned no results; falling back");
-                continue;
-            }
-            Ok(results) => {
-                let q = result_set_quality(&results);
-                info!(%pname, quality = q, count = results.len(), "Provider returned results");
+            let result = with_retry(pname, cfg.retries, || {
+                let p = provider.clone();
+                let q = query.to_owned();
+                let max = cfg.max_results;
+                async move { p.search(&q, max).await }
+            })
+            .await;
 
-                if best.is_empty() || q > result_set_quality(&best) {
-                    best = results;
+            match result {
+                Err(e) => {
+                    warn!(%pname, error = %e, "Provider failed; falling back");
+                    continue;
                 }
-
-                if q >= cfg.min_quality_score {
-                    // Acceptable quality — stop cascading
-                    break;
+                Ok(results) if results.is_empty() => {
+                    warn!(%pname, "Provider returned no results; falling back");
+                    continue;
                 }
-                warn!(%pname, quality = q, min = cfg.min_quality_score, "Quality below threshold; trying next provider");
+                Ok(results) => {
+                    let q = result_set_quality(&results);
+                    info!(%pname, quality = q, count = results.len(), "Provider returned results");
+
+                    if best.is_empty() || q > result_set_quality(&best) {
+                        best = results;
+                    }
+
+                    if q >= cfg.min_quality_score {
+                        // Acceptable quality — stop cascading
+                        break;
+                    }
+                    warn!(%pname, quality = q, min = cfg.min_quality_score, "Quality below threshold; trying next provider");
+                }
             }
         }
-    }
 
-    if best.is_empty() {
-        bail!("All search providers exhausted with no usable results for query: {query}");
-    }
+        if best.is_empty() {
+            bail!("All search providers exhausted with no usable results for query: {query}");
+        }
 
-    Ok(deduplicate(best))
+        Ok(deduplicate(best))
+    };
+
+    match tokio::time::timeout(deadline, search_future).await {
+        Ok(result) => result,
+        Err(_) => {
+            warn!(deadline_secs = deadline.as_secs(), "Search deadline exceeded");
+            bail!("Search timed out after {}s", deadline.as_secs());
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

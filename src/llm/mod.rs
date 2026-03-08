@@ -111,6 +111,15 @@ impl CircuitBreaker {
             }
         }
     }
+
+    /// Immediately open the circuit (e.g. on HTTP 429 rate-limit).
+    /// Skips the gradual failure counter — the provider is unavailable *now*.
+    fn record_rate_limit(&self) {
+        self.failures.store(self.threshold, Ordering::Relaxed);
+        if let Ok(mut guard) = self.opened_at.lock() {
+            *guard = Some(Instant::now());
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -157,7 +166,7 @@ impl OpenAiCompatProvider {
             .timeout(Duration::from_secs(timeout_secs))
             .user_agent("fetchsys/0.1")
             .build()
-            .expect("Failed to build HTTP client");
+            .unwrap_or_else(|_| reqwest::Client::new());
         Self {
             client,
             base_url: base_url.into().trim_end_matches('/').to_owned(),
@@ -263,7 +272,7 @@ impl GeminiProvider {
             .timeout(Duration::from_secs(timeout_secs))
             .user_agent("fetchsys/0.1")
             .build()
-            .expect("Failed to build Gemini HTTP client");
+            .unwrap_or_else(|_| reqwest::Client::new());
         Self { client, api_key, model, max_tokens, temperature }
     }
 
@@ -480,8 +489,14 @@ impl LlmProvider for FallbackChainProvider {
                     return Ok(text);
                 }
                 Err(e) => {
-                    cb.record_failure();
-                    warn!(provider = %provider.name(), error = %e, "Provider failed; trying next");
+                    let err_msg = e.to_string();
+                    if err_msg.contains("429") || err_msg.contains("rate_limit") {
+                        cb.record_rate_limit();
+                        warn!(provider = %provider.name(), error = %e, "Rate limited (429) — circuit opened immediately; trying next");
+                    } else {
+                        cb.record_failure();
+                        warn!(provider = %provider.name(), error = %e, "Provider failed; trying next");
+                    }
                     last_err = e;
                 }
             }

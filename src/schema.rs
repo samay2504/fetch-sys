@@ -36,7 +36,7 @@ pub struct Source {
     pub rank: usize,
     /// Raw LLM-friendly markdown returned by the reader adapter (may be empty
     /// if reader failed for this URL).
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub reader_raw: String,
 }
 
